@@ -1,55 +1,64 @@
 import pandas as pd
 import numpy as np
-
-import prepare
+import os
+import env
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
 
-
-# Generic splitting function for continuous target.
-
-
-
-def get_outliers(df, k):
-   '''
-    Given a series and a cutoff value, k (tukey value), returns the upper outliers for the series.
-    The values returned will be either 0 (if the point is not an outlier), or a
-    number that indicates how far away from the upper bound (q3 + (k*iqr)) the observation is.
-   '''
-   temp = df.copy()
-   for col in temp.describe().columns:
-      if not col.endswith('_outlier'):
-         q1, q3 = temp[col].quantile([.25, .75])
-         iqr = q3 - q1
-         upper_bound = q3 + k * iqr
-         lower_bound = q1 - k * iqr
-         #print(col)
-         temp[f"{col}_outlier"] = np.where((temp[col] - upper_bound) > 0,(temp[col] - upper_bound),
-                                       np.where((temp[col] - lower_bound)<0,(temp[col] - lower_bound),0))
-
-   outlier_cols = [col for col in temp if col.endswith('_outlier')]
-   for col in outlier_cols:
-      print('~~~\n' + col)
-      data = temp[col][temp[col] > 0]
-      print(data.describe())
-
-   return temp,outlier_cols
-
-def data_prep_drop(df, cols_to_remove=[], column_prop_required=.5, row_prop_required=.75):
+## begin acquire step
+def get_zillow_single_fam_2017_cluster():
     ''' 
-    does the inital data_prep on a data set, this involves dropping any explictly stated columns,
-    as well as dropping any columns or rows that do not meet the given thresholds (for non-null)
+    checks for filename (iris_df.csv) in directory and returns that if found
+    else it queries for a new one and saves it
     '''
-    df = df.drop(columns=cols_to_remove)
-    threshold = int(round(column_prop_required*len(df.index),0))
-    df.dropna(axis=1, thresh=threshold, inplace=True)
-    threshold = int(round(row_prop_required*len(df.columns),0))
-    df.dropna(axis=0, thresh=threshold, inplace=True)
+    if os.path.isfile("zillow_single_fam_sold_2017_cluster.csv"):
+        df = pd.read_csv("zillow_single_fam_sold_2017_cluster.csv", index_col = 0)
+    else:
+        sql_query = """
+                        SELECT  prop.*, 
+                                pred.logerror, 
+                                pred.transactiondate, 
+                                air.airconditioningdesc, 
+                                arch.architecturalstyledesc, 
+                                build.buildingclassdesc, 
+                                heat.heatingorsystemdesc, 
+                                landuse.propertylandusedesc, 
+                                story.storydesc, 
+                                construct.typeconstructiondesc 
+                        FROM    properties_2017 prop  
+                        INNER JOIN (SELECT  parcelid,
+                                            logerror,
+                                            Max(transactiondate) transactiondate 
+                                    FROM   predictions_2017 
+                                    GROUP  BY parcelid, logerror) pred
+                        USING (parcelid) 
+                        LEFT JOIN airconditioningtype air USING (airconditioningtypeid) 
+                        LEFT JOIN architecturalstyletype arch USING (architecturalstyletypeid) 
+                        LEFT JOIN buildingclasstype build USING (buildingclasstypeid) 
+                        LEFT JOIN heatingorsystemtype heat USING (heatingorsystemtypeid) 
+                        LEFT JOIN propertylandusetype landuse USING (propertylandusetypeid) 
+                        LEFT JOIN storytype story USING (storytypeid) 
+                        LEFT JOIN typeconstructiontype construct USING (typeconstructiontypeid) 
+                        -- WHERE  prop.latitude IS NOT NULL 
+                            -- AND prop.longitude IS NOT NULL
+                        WHERE propertylandusetypeid = 261
+                            AND transactiondate BETWEEN '2017-01-01' AND '2017-12-31'
+                    """
+        df = pd.read_sql(sql_query,get_connection("zillow"))
+        df.to_csv("zillow_single_fam_sold_2017_cluster.csv")
     return df
 
+def get_connection(db, user=env.user, host=env.host, password=env.password):
+    ''' 
+    basic synatx for getting the connection to connect to the database
+    '''
+    return f'mysql+pymysql://{user}:{password}@{host}/{db}'
+
+# end acquire step
 
 
+# begin prepare and tidy step
 def summarize(df):
     '''
     summary function that prints out the head, info, and describe of the passes dataframe as well as
@@ -108,48 +117,48 @@ def nulls_by_row(df):
     prnt_miss = num_missing / df.shape[1] * 100
     rows_missing = pd.DataFrame({'num_cols_missing': num_missing, 'percent_cols_missing': prnt_miss})\
     .reset_index().groupby(['num_cols_missing', 'percent_cols_missing']).count().reset_index().\
-        rename(columns={"customer_id": 'count'})
+        rename(columns={"index": 'count'})
 
     return rows_missing
 
-def split_tvt_continuous(df,target):
-    """
-    Takes in a df
-    Returns train, validate, and test DataFrames
-    """
-    # Create train_validate and test datasets
-    train_validate, test = train_test_split(df, test_size=0.2, random_state=123)
-    # Create train and validate datsets
-    train, validate = train_test_split(train_validate, test_size=0.25, random_state=123)
+def get_outliers(df, k):
+   '''
+    Given a series and a cutoff value, k (tukey value), returns the upper outliers for the series.
+    The values returned will be either 0 (if the point is not an outlier), or a
+    number that indicates how far away from the upper bound (q3 + (k*iqr)) the observation is.
+   '''
+   temp = df.copy()
+   for col in temp.describe().columns:
+      if not col.endswith('_outlier'):
+         q1, q3 = temp[col].quantile([.25, .75])
+         iqr = q3 - q1
+         upper_bound = q3 + k * iqr
+         lower_bound = q1 - k * iqr
+         #print(col)
+         temp[f"{col}_outlier"] = np.where((temp[col] - upper_bound) > 0,(temp[col] - upper_bound),
+                                       np.where((temp[col] - lower_bound)<0,(temp[col] - lower_bound),0))
 
-    X_train, y_train, X_validate, y_validate, X_test, y_test = X_and_y(train,validate,test,target)
+   outlier_cols = [col for col in temp if col.endswith('_outlier')]
+   for col in outlier_cols:
+      print('~~~\n' + col)
+      data = temp[col][temp[col] > 0]
+      print(data.describe())
 
-    print(f"train -> {train.shape}")
-    print(f"validate -> {validate.shape}")
-    print(f"test -> {test.shape}")
+   return temp,outlier_cols
 
-    return X_train, y_train, X_validate, y_validate, X_test, y_test, train, validate, test
-
-
-def X_and_y(train,validate,test,target):
+def data_prep_drop(df, cols_to_remove=[], column_prop_required=.5, row_prop_required=.75):
+    ''' 
+    does the inital data_prep on a data set, this involves dropping any explictly stated columns,
+    as well as dropping any columns or rows that do not meet the given thresholds (for non-null)
     '''
-    takes in 4 variables (3 df and 1 string)
-    just splits into X and y groups, nothing fancy
-    returns 6 variables
-    '''
-        # split train into X (dataframe, drop target) & y (series, keep target only)
-    X_train = train.drop(columns=[target])
-    y_train = train[target]
+    df = df.drop(columns=cols_to_remove)
+    threshold = int(round(column_prop_required*len(df.index),0))
+    df.dropna(axis=1, thresh=threshold, inplace=True)
+    threshold = int(round(row_prop_required*len(df.columns),0))
+    df.dropna(axis=0, thresh=threshold, inplace=True)
+    return df
 
-    # split validate into X (dataframe, drop target) & y (series, keep target only)
-    X_validate = validate.drop(columns=[target])
-    y_validate = validate[target]
 
-    # split test into X (dataframe, drop target) & y (series, keep target only)
-    X_test = test.drop(columns=[target])
-    y_test = test[target]
-
-    return X_train, y_train, X_validate, y_validate, X_test, y_test
 
 def get_numeric_X_cols(X_train, object_cols):
     """
@@ -176,7 +185,36 @@ def get_object_cols(df):
     return object_cols
 
 
-def min_max_scale(X_train, X_validate, X_test, numeric_cols):
+def split_tvt_continuous(df,target):
+    """
+    Takes in a df
+    Returns train, validate, and test DataFrames
+    """
+    # Create train_validate and test datasets
+    train_validate, test = train_test_split(df, test_size=0.2, random_state=123)
+    # Create train and validate datsets
+    train, validate = train_test_split(train_validate, test_size=0.25, random_state=123)
+
+    # split train into X (dataframe, drop target) & y (series, keep target only)
+    X_train = train.drop(columns=[target])
+    y_train = train[target]
+
+    # split validate into X (dataframe, drop target) & y (series, keep target only)
+    X_validate = validate.drop(columns=[target])
+    y_validate = validate[target]
+
+    # split test into X (dataframe, drop target) & y (series, keep target only)
+    X_test = test.drop(columns=[target])
+    y_test = test[target]
+
+    print(f"train -> {train.shape}")
+    print(f"validate -> {validate.shape}")
+    print(f"test -> {test.shape}")
+
+    return X_train, y_train, X_validate, y_validate, X_test, y_test, train, validate, test
+
+
+def min_max_scale(X_train, X_validate, X_test, scale_cols):
     """
     takes in the train data sets (3) and numeric column list,
     and fits a min-max scaler to the first dataframe and transforms all 3
@@ -185,119 +223,25 @@ def min_max_scale(X_train, X_validate, X_test, numeric_cols):
     # create the scaler object and fit it to X_train (i.e. identify min and max)
     # if copy = false, inplace row normalization happens and avoids a copy (if the input is already a numpy array).
 
-    scaler = MinMaxScaler(copy=True).fit(X_train[numeric_cols])
+    scaler = MinMaxScaler(copy=True).fit(X_train[scale_cols])
 
     # scale X_train, X_validate, X_test using the mins and maxes stored in the scaler derived from X_train.
     #
-    X_train_scaled_array = scaler.transform(X_train[numeric_cols])
-    X_validate_scaled_array = scaler.transform(X_validate[numeric_cols])
-    X_test_scaled_array = scaler.transform(X_test[numeric_cols])
+    X_train_scaled_array = scaler.transform(X_train[scale_cols])
+    X_validate_scaled_array = scaler.transform(X_validate[scale_cols])
+    X_test_scaled_array = scaler.transform(X_test[scale_cols])
 
     # convert arrays to dataframes
-    X_train_scaled = pd.DataFrame(X_train_scaled_array, columns=numeric_cols).set_index(
+    X_train_scaled = pd.DataFrame(X_train_scaled_array, columns=scale_cols).set_index(
         [X_train.index.values]
     )
 
     X_validate_scaled = pd.DataFrame(
-        X_validate_scaled_array, columns=numeric_cols
+        X_validate_scaled_array, columns=scale_cols
     ).set_index([X_validate.index.values])
 
-    X_test_scaled = pd.DataFrame(X_test_scaled_array, columns=numeric_cols).set_index(
+    X_test_scaled = pd.DataFrame(X_test_scaled_array, columns=scale_cols).set_index(
         [X_test.index.values]
     )
 
-    #scaler = RobustScaler(with_centering=True,quantile_range=(10,90),unit_variance=True)
-    #
-    #X_train_scaled = scaler.fit_transform(X_train) ##only use fit_transform for training, after that use transform (equations are created)
-    #X_validate_scaled = scaler.transform(X_validate)
-    #X_test_scaled = scaler.transform(X_test)
-
     return X_train_scaled, X_validate_scaled, X_test_scaled
-
-
-
-def wrangle_zillow(df,outlier_list,pred):
-    ''' 
-    gets info from prepare
-    removes outliers of numerical columns through the tukey method (k=1.5)
-    drops the bathroom labeld as 1.75 (i'm not aware of that being an official measurement)
-    adds column that categorizes years into decades
-    splits into 60%,20%,20%
-    returns the the modified dataframe, and the splits dataframe
-    '''
-
-    tukey_k = 1.5
-
-    for col in outlier_list:
-       IQR = (df[col].describe()["75%"] - df[col].describe()["25%"])
-       df = df[(df[col] < (df[col].describe()["75%"] + (IQR * tukey_k))) & \
-            (df[col] > (df[col].describe()["25%"] - (IQR * tukey_k)))]
-
-    df = df[df.bathrooms != 1.75]
-
-    df["decade built"] = (df["year built"]//10 *10).astype(int).astype(str) + "s"
-
-    X_train, y_train, X_validate, y_validate, X_test, y_test, train, validate, test = split_tvt_continuous(df,pred)
-
-    return df,X_train, y_train, X_validate, y_validate, X_test, y_test, train, validate, test
-
-
-
-
-
-def rfe(predictors_x,target_y,n_features):
-    ''' 
-    takes in the predictors (X) (predictors_x), the target (y) (target_y), and the number of features to select (k) 
-    returns the names of the top k selected features based on the Recursive Feature Elimination class. and a ranked df
-    '''
-
-    from sklearn.linear_model import LinearRegression
-    from sklearn.feature_selection import RFE
-
-    model = LinearRegression()
-    rfe = RFE(model,n_features_to_select=n_features)
-    rfe.fit(predictors_x,target_y)
-
-    print(pd.DataFrame({"rfe_ranking":rfe.ranking_},index=predictors_x.columns).sort_values("rfe_ranking")[:n_features])
-    X_train_transformed = pd.DataFrame(rfe.transform(predictors_x),columns=predictors_x.columns[rfe.get_support()],index=predictors_x.index)
-    X_train_transformed.head(3)
-
-    var_ranks = rfe.ranking_
-    var_names = predictors_x.columns.tolist()
-
-    rfe_ranked = pd.DataFrame({'Var': var_names, 'Rank': var_ranks}).sort_values("Rank")
-    
-    return rfe_ranked
-
-def select_kbest(predictors_x,target_y,n_features):
-    ''' 
-    takes in the predictors (X) (X_train), the target (y) (y_train), and the number of features to select (k) 
-    returns the names of the top k selected features based on the SelectKBest class.
-    '''
-
-    from sklearn.feature_selection import SelectKBest, f_regression
-
-    kbest = SelectKBest(f_regression,k=n_features) ## k returns the best amount of features as entered
-    _ = kbest.fit(predictors_x,target_y)
-
-    kbest.pvalues_
-    kbest.scores_
-
-    kbest_resutls = pd.DataFrame(dict(p=kbest.pvalues_,f=kbest.scores_))
-    kbest_resutls
-    predictors_x.columns[kbest.get_support()]
-
-    X_train_transformed = pd.DataFrame(kbest.transform(predictors_x),columns=predictors_x.columns[kbest.get_support()],index=predictors_x.index)
-    X_train_transformed.head(3)
-    print(X_train_transformed.columns.tolist())
-    return(X_train_transformed)
-
-#train["House sqft quantiled"] = pd.cut(train.area,4,labels=["<25% percentile area","25%~50% percentile area","50%~75% percentile area",">75% percentile area"])
-#train["Yard ratio quantiled"] = pd.cut(train["yard ratio"],4,labels=["<25% percentile area","25%~50% percentile area","50%~75% percentile area",">75% percentile area"])
-#temp1 = train.drop(columns=["area","year built","fips","openess","lot sqft","yard ratio"]).groupby(["zip","House sqft quantiled","Yard ratio quantiled","bedrooms","bathrooms"]).agg(["min","max"]).reset_index()
-#temp1 = temp1.dropna()
-#temp1["range"] = temp1["tax assessment"]["max"] - temp1["tax assessment"]["min"] 
-#temp1["tax max"] = temp1["tax assessment"]["max"]
-#temp1["tax min"] = temp1["tax assessment"]["min"]
-#temp1.drop(columns="tax assessment",inplace=True)
-#temp1
