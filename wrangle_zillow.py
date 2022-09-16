@@ -7,7 +7,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
 
 ## begin acquire step
-def get_zillow_single_fam_2017_cluster():
+def get_zillow_single_unit_2017_cluster():
     ''' 
     checks for filename (iris_df.csv) in directory and returns that if found
     else it queries for a new one and saves it
@@ -16,7 +16,7 @@ def get_zillow_single_fam_2017_cluster():
         df = pd.read_csv("zillow_single_fam_sold_2017_cluster.csv", index_col = 0)
     else:
         sql_query = """
-                        SELECT  prop.*, 
+                        SELECT  properties_2017.*, 
                                 pred.logerror, 
                                 pred.transactiondate, 
                                 air.airconditioningdesc, 
@@ -26,10 +26,10 @@ def get_zillow_single_fam_2017_cluster():
                                 landuse.propertylandusedesc, 
                                 story.storydesc, 
                                 construct.typeconstructiondesc 
-                        FROM    properties_2017 prop  
-                        INNER JOIN (SELECT  parcelid,
-                                            logerror,
-                                            Max(transactiondate) transactiondate 
+                        FROM    properties_2017 
+                        JOIN (SELECT    parcelid,
+                                        logerror,
+                                        Max(transactiondate) transactiondate 
                                     FROM   predictions_2017 
                                     GROUP  BY parcelid, logerror) pred
                         USING (parcelid) 
@@ -40,9 +40,9 @@ def get_zillow_single_fam_2017_cluster():
                         LEFT JOIN propertylandusetype landuse USING (propertylandusetypeid) 
                         LEFT JOIN storytype story USING (storytypeid) 
                         LEFT JOIN typeconstructiontype construct USING (typeconstructiontypeid) 
-                        -- WHERE  prop.latitude IS NOT NULL 
-                            -- AND prop.longitude IS NOT NULL
-                        WHERE propertylandusetypeid = 261
+                         WHERE  properties_2017.latitude IS NOT NULL 
+                            AND properties_2017.longitude IS NOT NULL
+                            -- AND propertylandusetypeid = 261
                             AND transactiondate BETWEEN '2017-01-01' AND '2017-12-31'
                     """
         df = pd.read_sql(sql_query,get_connection("zillow"))
@@ -84,13 +84,13 @@ def summarize(df):
     categorical_cols = [col for col in df.columns if col not in numerical_cols ]
     print('--------')
     print('value_counts: \n')
-    for col in df.columns:
-        print('Column Name: ', col)
-        if col in categorical_cols:
-            print(df[col].value_counts())
-        else:
-            print(df[col].value_counts(bins=10, sort=False))
-        print('--')
+    #for col in df.columns:
+    #    print('Column Name: ', col)
+    #    if col in categorical_cols:
+    #        print(df[col].value_counts())
+    #    else:
+    #        print(df[col].value_counts(bins=10, sort=False))
+    #    print('--')
     print('---------')
     print('Report Finished')
 
@@ -132,11 +132,11 @@ def get_outliers(df, k):
       if not col.endswith('_outlier'):
          q1, q3 = temp[col].quantile([.25, .75])
          iqr = q3 - q1
-         upper_bound = q3 + k * iqr
-         lower_bound = q1 - k * iqr
+         upper_bound = q3 + (k * iqr)
+         lower_bound = q1 - (k * iqr)
          #print(col)
          temp[f"{col}_outlier"] = np.where((temp[col] - upper_bound) > 0,(temp[col] - upper_bound),
-                                       np.where((temp[col] - lower_bound)<0,(temp[col] - lower_bound),0))
+                                       np.where((lower_bound - temp[col])>0,(lower_bound - temp[col]),0))
 
    outlier_cols = [col for col in temp if col.endswith('_outlier')]
    for col in outlier_cols:
